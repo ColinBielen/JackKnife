@@ -1,0 +1,360 @@
+options { STATIC = false; }
+
+PARSER_BEGIN(CommandLineParser)
+
+package com.ceg.online.jackknife.console;
+
+import java.io.StringReader;
+import java.util.List;
+import java.util.ArrayList;
+
+class CommandLineParser {
+    private CommandProcessor cp;
+
+
+    public CommandLineParser(StringReader sr, CommandProcessor cp) {
+        this(sr);
+        this.cp = cp;
+    }
+}
+
+PARSER_END(CommandLineParser)
+
+SKIP: {
+  " " | "\t"
+}
+
+TOKEN: {
+    < LS: "ls" > |
+    < CD: "cd" > |
+    < PWD: "pwd" > |
+    < SETPROP: "setprop" | "sp" > : SPMODE |
+    < RMPROP: "rmprop"  | "rp" > |
+    < RM: "rm" > |
+    < LOCK: "lock" > |
+    < UNLOCK: "unlock" > |
+    < LOCKSTATUS: "lockstatus" > |
+    < ADDMIXIN: "addmixin" > |
+    < FIND: "find" > : FINDMODE |
+    < MV: "mv" > |
+    < QUERY: "query" > : QUERYMODE |
+    < MKNODE: "mknode" > |
+    < SHOWREFS: "sr" > : UUIDMODE |
+    < CDUUID: "cduuid" > : UUIDMODE |
+    < REBUILD: "rebuild" > |
+    < QUIT: "quit" | "\\q" | "exit"> 
+}
+
+TOKEN: {
+    < #LETTER: ["a"-"z", "A"-"Z"] > |
+    < #NUMBER: ["0"-"9"] > |
+    < #HEX: ["a"-"f", "A"-"F"] | <NUMBER> > |
+    < #OTHER: ["_"]> |
+    < #IDENTIFIER: (<LETTER>|<NUMBER>|<OTHER>)+> |
+    < #QNAMEPATH: <QNAME> (<INDEX>)? > |
+    < #PATHCOMP: "." | ".." | <QNAMEPATH> > |
+    < #NCNAME: (["a"-"z","A"-"Z","0"-"9","_"])+ (["a"-"z","A"-"Z","0"-"9",".","_","-","?","!",","])* > |
+    < QNAME: ( <NCNAME> ":" ) ? <NCNAME> > |
+    < OVERWRITE: "-o" | "-O"> |
+    < DEEP: "-d" | "-D"> |
+    < SESSIONSCOPED: "-s" | "-S"> |
+    < INDEX: "[" (<NUMBER>)+ "]" > |
+    < PATH: "/" | (("/")? <PATHCOMP> ( "/" <PATHCOMP> )* ("/")?)> 
+}
+<UUIDMODE> SKIP: {
+  " " | "\t"
+}
+<UUIDMODE> TOKEN: {
+    < #QUAD: <HEX><HEX><HEX><HEX> > |
+    < UUID: <QUAD><QUAD>"-"<QUAD>"-"<QUAD>"-"<QUAD>"-"<QUAD><QUAD><QUAD> >
+}
+
+<QUERYMODE> TOKEN: {
+    < #WS: [" ", "\t"]> |
+    < QUERYOPTION: (<WS>)+"-" (<LETTER>)+ > |
+    < QUERYSTRING: (<WS>)+(~["-"])(~["\n","\r"])+> : DEFAULT
+}
+
+<SPMODE> SKIP: {
+  " " | "\t"
+}
+
+<SPMODE> TOKEN: {
+    < SPPATH: "/" | (("/")? <PATHCOMP> ( "/" <PATHCOMP> )* ("/")?)> : VALUEMODE
+}
+
+<VALUEMODE> SKIP: {
+  " " | "\t"
+}
+
+<VALUEMODE> TOKEN: {
+    < LONG: ["1"-"9"] (["0"-"9"])* > |
+    < STRING: "\"" (~["\""])* "\""> {matchedToken.image = image.toString().substring(1, image.toString().length()-1);}
+}
+<FINDMODE> SKIP: {
+  "\t"
+}
+
+<FINDMODE> TOKEN: {
+    < #SYMBOL: [" ",".","_","-","?","!",",","/","(",")","'",":",";","<",">","*"] > |
+    < RANDOM: ([" "])(<LETTER> | <NUMBER> | <SYMBOL>)+ >
+}
+
+void Command() :
+{}
+{
+     (oneCommand())? <EOF>
+}
+
+
+void Query() :
+{
+    Token query;
+    Token qoptions;
+}
+{
+    qoptions = <QUERYOPTION> query = <QUERYSTRING> {
+        if(qoptions.image.equals("-r")) {
+            cp.showReferences(query.image);
+        }
+    }
+    | query = <QUERYSTRING> {
+        cp.processQuery(query.image.trim());
+    }
+}
+
+void QueryCommand() :
+{}
+{
+    <QUERY> Query()
+}
+
+void QuitCommand() :
+{}
+{
+    <QUIT> {
+    	cp.quit();
+    }
+}
+
+/**
+ * 'pwd' command
+ */
+void PWDCommand() :
+{
+}
+{
+    <PWD> {
+        cp.showCurrentPath();
+    }
+}
+/**
+ * 'cd' command
+ */
+void CDCommand() :
+{
+    Token path;
+}
+{
+    <CD> (path = <PATH> | path = <QNAME>) {
+        cp.setCurrentPath(path.image);
+    }
+}
+
+void LSCommand() :
+{
+    Token path = null;
+}
+{
+    <LS> (path = <PATH> | path = <QNAME>)?{
+        List<String> elements;
+        if(path != null) {
+            elements = cp.listPath(path.image);
+        } else {
+            elements = cp.listCurrentPath();
+        }
+    }
+}
+
+void RMCommand() :
+{
+    Token path = null;
+}
+{
+    <RM> (path = <PATH> | path = <QNAME>) {
+        cp.removeNode(path.image);
+    }
+}
+
+void ADDMIXINCommand() :
+{
+    Token path = null;
+    Token mixin = null;
+    List<String> mixins = new ArrayList<String>();
+}
+{
+    <ADDMIXIN> ((mixin = <QNAME>) {
+    	mixins.add(mixin.image);
+    })+ (path = <PATH> | path = <QNAME>) {
+        cp.addMixin(mixins, path.image);
+    }
+}
+
+void LOCKCommand() :
+{
+    Token path = null;
+    Token scoped = null;
+    Token deep = null;
+}
+{
+    <LOCK> (deep = <DEEP>)? (scoped = <SESSIONSCOPED>)? (path = <PATH> | path = <QNAME>) {
+    	boolean d = deep != null;
+    	boolean s = scoped != null;
+        cp.lockPath(path.image, d, s);
+    }
+}
+
+void UNLOCKCommand() :
+{
+    Token path = null;
+}
+{
+    <UNLOCK> (path = <PATH> | path = <QNAME>) {
+        cp.unlockPath(path.image);
+    }
+}
+
+void LOCKSTATUSCommand() :
+{
+    Token path = null;
+}
+{
+    <LOCKSTATUS> (path = <PATH> | path = <QNAME>) {
+        cp.statusOfPath(path.image);
+    }
+}
+
+
+void RebuildNodeCommand() :
+{
+   Token path = null;
+}
+{
+    <REBUILD> (path = <PATH> | path = <QNAME>) {
+       cp.rebuildNode(path.image);
+    }
+}
+
+void MVCommand() :
+{
+    Token source = null;
+    Token dest = null;
+    Token overwrite = null;
+}
+{
+    <MV> (overwrite = <OVERWRITE>)? (source = <PATH> | source = <QNAME>) (dest = <PATH> | dest = <QNAME>) {
+    	if(overwrite == null)
+        	cp.moveNode(source.image, dest.image);
+        else
+        	cp.overwriteNode(source.image, dest.image);
+    }
+}
+
+void MKNodeCommand() :
+{
+    Token path = null;
+    Token nodetype = null;
+}
+{
+    <MKNODE> nodetype = <QNAME> (path = <PATH> | path = <QNAME>) {
+        cp.makeNode(path.image, nodetype.image);
+    }
+}
+
+void setValue(Token path) :
+{
+    Token value = null;
+}
+{
+    value = <LONG> {
+        cp.setProperty(path.image, Long.parseLong(value.image));
+    }
+    | value = <STRING> {
+        cp.setProperty(path.image, new String(value.image));
+    }
+}
+
+void SetPropertyCommand() :
+{
+    Token path = null;
+    Token value = null;
+}
+{
+    <SETPROP> path = <SPPATH> setValue(path)
+}
+
+void RemovePropertyCommand():
+{
+    Token path=null;
+    Token propName=null;
+}
+{
+    <RMPROP> (path = <PATH>)?(propName=<QNAME>) {
+        cp.removeProperty(path.image,propName.image);
+    }
+}
+
+
+void ShowReferencesCommand() :
+{
+    Token uuid = null;
+}
+{
+    <SHOWREFS> uuid = <UUID> {
+        cp.showReferences(uuid.image);
+    }
+}
+
+void CDUUIDCommand() :
+{
+    Token uuid = null;
+}
+{
+    <CDUUID> uuid = <UUID> {
+        cp.setPathToNodeAtUUID(uuid.image);
+    }
+}
+
+void FINDCommand() :
+{
+    Token param = null;
+}
+{
+    <FIND> (param = <RANDOM>) {
+        cp.find(param.image.trim());
+    }
+}
+
+void oneCommand() :
+{}
+{
+    CDCommand() |
+    LSCommand() |
+    PWDCommand() |
+    RMCommand() |
+    FINDCommand() |
+    ADDMIXINCommand() |
+    LOCKCommand() |
+    UNLOCKCommand() |
+    LOCKSTATUSCommand() |
+    MVCommand() |
+    MKNodeCommand() |
+    QueryCommand() |
+    QuitCommand() |
+    SetPropertyCommand() |
+    RemovePropertyCommand() |
+    ShowReferencesCommand() |
+    RebuildNodeCommand() | 
+    CDUUIDCommand() 
+}
+
